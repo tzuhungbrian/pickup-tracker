@@ -7,15 +7,19 @@ import {
   Check,
   ChevronLeft,
   Clock3,
+  Cloud,
   Copy,
   Download,
   History,
   Home,
   ListChecks,
+  LogIn,
+  LogOut,
   Minus,
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   Save,
   Shield,
   Sparkles,
@@ -23,9 +27,11 @@ import {
   Trash2,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import type { User } from "@supabase/supabase-js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActiveRun,
+  DeletedRunTombstone,
   DraftRun,
   EMPTY_DATA,
   EMPTY_STATS,
@@ -51,8 +57,12 @@ import {
   getSessionsInDateRange,
   ratingLabels,
   statLabels,
-  statValidation
+  statValidation,
+  touchRun,
+  touchSession
 } from "@/lib/basketball";
+import { createDeletedRunTombstone, normalizeTrackerData, syncTrackerData } from "@/lib/cloudSync";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 type View = "home" | "session" | "timer" | "entry" | "history" | "export";
 
@@ -97,7 +107,7 @@ function readStoredData(): TrackerData {
       return EMPTY_DATA;
     }
 
-    return {
+    return normalizeTrackerData({
       ...EMPTY_DATA,
       ...parsed,
       sessions: parsed.sessions.map((session) => ({
@@ -116,8 +126,10 @@ function readStoredData(): TrackerData {
       })),
       activeRun: parsed.activeRun ?? null,
       draftRun: parsed.draftRun ?? null,
-      activeSessionId: parsed.activeSessionId ?? null
-    };
+      activeSessionId: parsed.activeSessionId ?? null,
+      deletedRuns: parsed.deletedRuns ?? [],
+      lastSyncedAt: parsed.lastSyncedAt ?? null
+    });
   } catch {
     return EMPTY_DATA;
   }
@@ -193,6 +205,14 @@ function EmptyState({ title, body }: { title: string; body: string }) {
       </div>
     </div>
   );
+}
+
+function formatSyncTime(value: string | null) {
+  if (!value) {
+    return "Never synced";
+  }
+
+  return `Last sync ${formatDateTime(value)}`;
 }
 
 function StatTile({ label, value }: { label: string; value: string | number }) {
@@ -345,6 +365,15 @@ function BottomNav({ view, setView }: { view: View; setView: (view: View) => voi
 function HomeScreen({
   data,
   activeSession,
+  cloudUser,
+  syncConfigured,
+  syncStatus,
+  syncMessage,
+  syncEmail,
+  onSyncEmailChange,
+  onSendMagicLink,
+  onSignOut,
+  onManualSync,
   onCreateSession,
   onContinueSession,
   onResumeTimer,
@@ -354,6 +383,15 @@ function HomeScreen({
 }: {
   data: TrackerData;
   activeSession: Session | undefined;
+  cloudUser: User | null;
+  syncConfigured: boolean;
+  syncStatus: "idle" | "syncing" | "error" | "sent";
+  syncMessage: string;
+  syncEmail: string;
+  onSyncEmailChange: (email: string) => void;
+  onSendMagicLink: () => void;
+  onSignOut: () => void;
+  onManualSync: () => void;
   onCreateSession: () => void;
   onContinueSession: () => void;
   onResumeTimer: () => void;
@@ -413,6 +451,19 @@ function HomeScreen({
           )}
         </section>
 
+        <CloudSyncCard
+          user={cloudUser}
+          configured={syncConfigured}
+          status={syncStatus}
+          message={syncMessage}
+          email={syncEmail}
+          lastSyncedAt={data.lastSyncedAt}
+          onEmailChange={onSyncEmailChange}
+          onSendMagicLink={onSendMagicLink}
+          onSignOut={onSignOut}
+          onManualSync={onManualSync}
+        />
+
         <section className="quick-grid">
           <StatTile label="Sessions" value={data.sessions.length} />
           <StatTile label="Runs" value={allTotals.runs} />
@@ -440,6 +491,94 @@ function HomeScreen({
         </SectionCard>
       </main>
     </>
+  );
+}
+
+function CloudSyncCard({
+  user,
+  configured,
+  status,
+  message,
+  email,
+  lastSyncedAt,
+  onEmailChange,
+  onSendMagicLink,
+  onSignOut,
+  onManualSync
+}: {
+  user: User | null;
+  configured: boolean;
+  status: "idle" | "syncing" | "error" | "sent";
+  message: string;
+  email: string;
+  lastSyncedAt: string | null;
+  onEmailChange: (email: string) => void;
+  onSendMagicLink: () => void;
+  onSignOut: () => void;
+  onManualSync: () => void;
+}) {
+  if (!configured) {
+    return (
+      <section className="sync-card">
+        <div className="sync-heading">
+          <Cloud size={20} aria-hidden="true" />
+          <div>
+            <strong>Cloud sync not configured</strong>
+            <span>Add Supabase env vars to sync phone and desktop.</span>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (!user) {
+    return (
+      <section className="sync-card">
+        <div className="sync-heading">
+          <Cloud size={20} aria-hidden="true" />
+          <div>
+            <strong>Sync across devices</strong>
+            <span>Email magic link keeps phone and desktop together.</span>
+          </div>
+        </div>
+        <div className="sync-login">
+          <input
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(event) => onEmailChange(event.target.value)}
+          />
+          <Button onClick={onSendMagicLink} disabled={!email || status === "syncing"}>
+            <LogIn size={18} aria-hidden="true" />
+            Send link
+          </Button>
+        </div>
+        {message ? <p className={`sync-message ${status === "error" ? "sync-message-error" : ""}`}>{message}</p> : null}
+      </section>
+    );
+  }
+
+  return (
+    <section className="sync-card">
+      <div className="sync-heading">
+        <Cloud size={20} aria-hidden="true" />
+        <div>
+          <strong>Cloud sync on</strong>
+          <span>{user.email ?? "Signed in"} - {formatSyncTime(lastSyncedAt)}</span>
+        </div>
+      </div>
+      <div className="sync-actions">
+        <Button variant="secondary" onClick={onManualSync} disabled={status === "syncing"}>
+          <RefreshCw size={18} aria-hidden="true" />
+          {status === "syncing" ? "Syncing" : "Sync now"}
+        </Button>
+        <Button variant="ghost" onClick={onSignOut}>
+          <LogOut size={18} aria-hidden="true" />
+          Sign out
+        </Button>
+      </div>
+      {message ? <p className={`sync-message ${status === "error" ? "sync-message-error" : ""}`}>{message}</p> : null}
+    </section>
   );
 }
 
@@ -900,10 +1039,16 @@ function ExportScreen({ sessions }: { sessions: Session[] }) {
 export function BasketTrackerApp() {
   const [data, setData] = useState<TrackerData>(EMPTY_DATA);
   const [hydrated, setHydrated] = useState(false);
+  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const [syncEmail, setSyncEmail] = useState("");
+  const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error" | "sent">("idle");
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncDirty, setSyncDirty] = useState(false);
   const [view, setView] = useState<View>("home");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [editingRun, setEditingRun] = useState<Run | null>(null);
   const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
+  const syncTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const stored = readStoredData();
@@ -920,6 +1065,24 @@ export function BasketTrackerApp() {
       setSelectedSessionId(stored.activeSessionId);
       setView("session");
     }
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) {
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data: authData }) => {
+      setCloudUser(authData.session?.user ?? null);
+      setSyncDirty(Boolean(authData.session?.user));
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCloudUser(session?.user ?? null);
+      setSyncDirty(Boolean(session?.user));
+    });
+
+    return () => listener.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -940,16 +1103,74 @@ export function BasketTrackerApp() {
   const selectedSession =
     data.sessions.find((session) => session.id === selectedSessionId) ?? activeSession ?? data.sessions[0];
 
+  const runSync = useCallback(
+    async (nextData?: TrackerData) => {
+      if (!cloudUser || !supabase) {
+        return;
+      }
+
+      setSyncStatus("syncing");
+      setSyncMessage("Syncing local and cloud data...");
+
+      try {
+        const result = await syncTrackerData(nextData ?? data, cloudUser);
+        setData(result.data);
+        setSyncDirty(false);
+        setSyncStatus("idle");
+        setSyncMessage(
+          `Synced ${result.pushedSessions} sessions, ${result.pushedRuns} runs${result.pushedDeletedRuns ? `, ${result.pushedDeletedRuns} deletions` : ""}.`
+        );
+      } catch (error) {
+        setSyncStatus("error");
+        setSyncMessage(error instanceof Error ? error.message : "Sync failed. Your local data is still saved.");
+      }
+    },
+    [cloudUser, data]
+  );
+
+  useEffect(() => {
+    if (!hydrated || !cloudUser || !syncDirty) {
+      return;
+    }
+
+    if (syncTimerRef.current) {
+      window.clearTimeout(syncTimerRef.current);
+    }
+
+    syncTimerRef.current = window.setTimeout(() => {
+      runSync();
+    }, 1200);
+
+    return () => {
+      if (syncTimerRef.current) {
+        window.clearTimeout(syncTimerRef.current);
+      }
+    };
+  }, [cloudUser, hydrated, runSync, syncDirty]);
+
+  function updateTracker(updater: (current: TrackerData) => TrackerData, shouldSync = true) {
+    setData((current) => {
+      const next = normalizeTrackerData(updater(current));
+      return next;
+    });
+
+    if (shouldSync) {
+      setSyncDirty(true);
+    }
+  }
+
   function replaceSession(sessionId: string, updater: (session: Session) => Session) {
-    setData((current) => ({
+    updateTracker((current) => ({
       ...current,
-      sessions: current.sessions.map((session) => (session.id === sessionId ? updater(session) : session))
+      sessions: current.sessions.map((session) =>
+        session.id === sessionId ? touchSession(updater(session)) : session
+      )
     }));
   }
 
   function startSession() {
     const session = createSession();
-    setData((current) => ({
+    updateTracker((current) => ({
       ...current,
       sessions: [session, ...current.sessions],
       activeSessionId: session.id
@@ -976,7 +1197,7 @@ export function BasketTrackerApp() {
       startedAt: new Date().toISOString()
     };
 
-    setData((current) => ({ ...current, activeRun, draftRun: null }));
+    updateTracker((current) => ({ ...current, activeRun, draftRun: null }), false);
     setSelectedSessionId(sessionId);
     setView("timer");
   }
@@ -995,7 +1216,7 @@ export function BasketTrackerApp() {
       durationSeconds: secondsSince(data.activeRun.startedAt)
     };
 
-    setData((current) => ({ ...current, activeRun: null, draftRun }));
+    updateTracker((current) => ({ ...current, activeRun: null, draftRun }), false);
     setSelectedSessionId(draftRun.sessionId);
     setEditingRun(null);
     setView("entry");
@@ -1007,7 +1228,7 @@ export function BasketTrackerApp() {
     }
 
     const sessionId = data.activeRun?.sessionId ?? selectedSessionId;
-    setData((current) => ({ ...current, activeRun: null }));
+    updateTracker((current) => ({ ...current, activeRun: null }), false);
     setSelectedSessionId(sessionId);
     setView("session");
   }
@@ -1016,7 +1237,7 @@ export function BasketTrackerApp() {
     if (editingRun && selectedSessionId) {
       replaceSession(selectedSessionId, (session) => ({
         ...session,
-        runs: session.runs.map((run) => (run.id === editingRun.id ? { ...run, stats } : run))
+        runs: session.runs.map((run) => (run.id === editingRun.id ? touchRun({ ...run, stats }) : run))
       }));
       setEditingRun(null);
       setView("session");
@@ -1032,14 +1253,15 @@ export function BasketTrackerApp() {
       startedAt: data.draftRun.startedAt,
       endedAt: data.draftRun.endedAt,
       durationSeconds: data.draftRun.durationSeconds,
-      stats
+      stats,
+      updatedAt: new Date().toISOString()
     };
 
-    setData((current) => ({
+    updateTracker((current) => ({
       ...current,
       draftRun: null,
       sessions: current.sessions.map((session) =>
-        session.id === data.draftRun?.sessionId ? { ...session, runs: [...session.runs, run] } : session
+        session.id === data.draftRun?.sessionId ? touchSession({ ...session, runs: [...session.runs, run] }) : session
       )
     }));
     setSelectedSessionId(data.draftRun.sessionId);
@@ -1058,7 +1280,7 @@ export function BasketTrackerApp() {
     }
 
     const sessionId = data.draftRun?.sessionId ?? selectedSessionId;
-    setData((current) => ({ ...current, draftRun: null }));
+    updateTracker((current) => ({ ...current, draftRun: null }), false);
     setSelectedSessionId(sessionId);
     setView("session");
   }
@@ -1073,10 +1295,30 @@ export function BasketTrackerApp() {
       return;
     }
 
-    replaceSession(selectedSessionId, (session) => ({
-      ...session,
-      runs: session.runs.filter((run) => run.id !== runId)
-    }));
+    updateTracker((current) => {
+      let tombstone: DeletedRunTombstone | null = null;
+      const sessions = current.sessions.map((session) => {
+        if (session.id !== selectedSessionId) {
+          return session;
+        }
+
+        const run = session.runs.find((candidate) => candidate.id === runId);
+        if (run) {
+          tombstone = createDeletedRunTombstone(run, session.id);
+        }
+
+        return touchSession({
+          ...session,
+          runs: session.runs.filter((candidate) => candidate.id !== runId)
+        });
+      });
+
+      return {
+        ...current,
+        sessions,
+        deletedRuns: tombstone ? [...(current.deletedRuns ?? []), tombstone] : current.deletedRuns
+      };
+    });
   }
 
   function finishSession() {
@@ -1088,10 +1330,10 @@ export function BasketTrackerApp() {
       ...session,
       endedAt: new Date().toISOString()
     }));
-    setData((current) => ({
+    updateTracker((current) => ({
       ...current,
       activeSessionId: current.activeSessionId === selectedSessionId ? null : current.activeSessionId
-    }));
+    }), false);
   }
 
   function updateReview(sessionId: string, review: Session["review"]) {
@@ -1102,6 +1344,42 @@ export function BasketTrackerApp() {
     await copyTextToClipboard(buildSessionSummary(session));
     setCopiedSessionId(session.id);
     window.setTimeout(() => setCopiedSessionId(null), 1200);
+  }
+
+  async function sendMagicLink() {
+    if (!supabase || !syncEmail) {
+      return;
+    }
+
+    setSyncStatus("syncing");
+    setSyncMessage("Sending magic link...");
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email: syncEmail,
+      options: {
+        emailRedirectTo: window.location.origin
+      }
+    });
+
+    if (error) {
+      setSyncStatus("error");
+      setSyncMessage(error.message);
+      return;
+    }
+
+    setSyncStatus("sent");
+    setSyncMessage("Magic link sent. Open it on this device to sign in.");
+  }
+
+  async function signOut() {
+    if (!supabase) {
+      return;
+    }
+
+    await supabase.auth.signOut();
+    setCloudUser(null);
+    setSyncStatus("idle");
+    setSyncMessage("Signed out. Local data stays on this device.");
   }
 
   if (!hydrated) {
@@ -1123,6 +1401,15 @@ export function BasketTrackerApp() {
         <HomeScreen
           data={data}
           activeSession={activeSession}
+          cloudUser={cloudUser}
+          syncConfigured={isSupabaseConfigured}
+          syncStatus={syncStatus}
+          syncMessage={syncMessage}
+          syncEmail={syncEmail}
+          onSyncEmailChange={setSyncEmail}
+          onSendMagicLink={sendMagicLink}
+          onSignOut={signOut}
+          onManualSync={() => runSync()}
           onCreateSession={startSession}
           onContinueSession={() => {
             if (activeSession) {

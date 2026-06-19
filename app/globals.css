@@ -193,6 +193,7 @@ button {
 
 .hero-card,
 .score-card,
+.sync-card,
 .timer-card,
 .entry-summary,
 .section-card,
@@ -251,6 +252,75 @@ button {
 
 .quick-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.sync-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.sync-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.sync-heading svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.sync-heading div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.sync-heading strong {
+  color: var(--text);
+  font-size: 0.96rem;
+  line-height: 1.2;
+}
+
+.sync-heading span,
+.sync-message {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.sync-login,
+.sync-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+}
+
+.sync-login input {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--text);
+  outline: none;
+  font-size: 0.92rem;
+}
+
+.sync-login input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.14);
+}
+
+.sync-message {
+  margin: 0;
+}
+
+.sync-message-error {
+  color: var(--danger);
 }
 
 .box-grid {
@@ -835,6 +905,8 @@ button {
   .timer-actions,
   .entry-actions,
   .export-actions,
+  .sync-login,
+  .sync-actions,
   .date-grid {
     grid-template-columns: 1fr;
   }

@@ -31,6 +31,12 @@ export type Run = {
   endedAt: string;
   durationSeconds: number;
   stats: RunStats;
+  updatedAt: string;
+};
+
+export type DeletedRunTombstone = Run & {
+  sessionId: string;
+  deletedAt: string;
 };
 
 export type DraftRun = {
@@ -53,6 +59,7 @@ export type Session = {
   endedAt: string | null;
   runs: Run[];
   review: SessionReview;
+  updatedAt: string;
 };
 
 export type TrackerData = {
@@ -61,6 +68,8 @@ export type TrackerData = {
   activeSessionId: string | null;
   activeRun: ActiveRun | null;
   draftRun: DraftRun | null;
+  deletedRuns: DeletedRunTombstone[];
+  lastSyncedAt: string | null;
 };
 
 export type SessionTotals = RunStats & {
@@ -102,7 +111,9 @@ export const EMPTY_DATA: TrackerData = {
   sessions: [],
   activeSessionId: null,
   activeRun: null,
-  draftRun: null
+  draftRun: null,
+  deletedRuns: [],
+  lastSyncedAt: null
 };
 
 export const statLabels: Record<StatKey, string> = {
@@ -143,12 +154,29 @@ export function createId(prefix: string) {
 }
 
 export function createSession(): Session {
+  const now = new Date().toISOString();
+
   return {
     id: createId("session"),
-    startedAt: new Date().toISOString(),
+    startedAt: now,
     endedAt: null,
     runs: [],
-    review: { ...EMPTY_REVIEW }
+    review: { ...EMPTY_REVIEW },
+    updatedAt: now
+  };
+}
+
+export function touchSession(session: Session, updatedAt = new Date().toISOString()): Session {
+  return {
+    ...session,
+    updatedAt
+  };
+}
+
+export function touchRun(run: Run, updatedAt = new Date().toISOString()): Run {
+  return {
+    ...run,
+    updatedAt
   };
 }
 
