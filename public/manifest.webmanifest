@@ -1,0 +1,17 @@
+{
+  "name": "Pickup Basketball Tracker",
+  "short_name": "Pickup",
+  "description": "Track local-first pickup basketball sessions and runs.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#f97316",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
